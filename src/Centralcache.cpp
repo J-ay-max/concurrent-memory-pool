@@ -1,12 +1,12 @@
-#include "CentralCache.h"
+#include "Centralcache.h"
 #include "Pagecache.h"
 
 CentralCache CentralCache::_sInst;
 
-// 获取一个非空的span
+// Fetch a non-empty span
 Span* CentralCache::GetOneSpan(SpanList& list, size_t size)
 {
-	// 查看当前的spanlist中是否有还有未分配对象的span
+	// Check whether any span in the list still has free objects
 	Span* it = list.Begin();
 	while (it != list.End())
 	{
@@ -20,25 +20,25 @@ Span* CentralCache::GetOneSpan(SpanList& list, size_t size)
 		}
 	}
 
-	// 先把central cache的桶锁解掉，这样如果其他线程释放内存对象回来，不会阻塞
+	// Release the bucket lock first so returning threads are not blocked
 	list._mtx.unlock();
 
-	// 走到这里说没有空闲span了，只能找page cache要
+	// No free span available; request one from the page cache
 	PageCache::GetInstance()->_pageMtx.lock();
 	Span* span = PageCache::GetInstance()->NewSpan(SizeClass::NumMovePage(size));
 	span->_isUse = true;
 	span->_objSize = size;
 	PageCache::GetInstance()->_pageMtx.unlock();
 
-	// 对获取span进行切分，不需要加锁，因为这会其他线程访问不到这个span
+	// Split the fetched span without a lock: no other thread can reach it yet
 
-	// 计算span的大块内存的起始地址和大块内存的大小(字节数)
+	// Compute the span's start address and total size in bytes
 	char* start = (char*)(span->_pageId << PAGE_SHIFT);
 	size_t bytes = span->_n << PAGE_SHIFT;
 	char* end = start + bytes;
 
-	// 把大块内存切成自由链表链接起来
-	// 1、先切一块下来去做头，方便尾插
+	// Carve the block into objects and link them into a free list
+	// 1. Cut one object first to serve as the list head (for O(1) tail insert)
 	span->_freeList = start;
 	start += size;
 	void* tail = span->_freeList;
@@ -53,8 +53,8 @@ Span* CentralCache::GetOneSpan(SpanList& list, size_t size)
 
 	NextObj(tail) = nullptr;
 
-	// 1、条件断点
-	// 2、疑似死循环，可以中断程序，程序会在正在运行的地方停下来
+	// 1. Conditional breakpoint
+	// 2. Suspected infinite loop: break to inspect the current line
 	//int j = 0;
 	//void* cur = span->_freeList;
 	//while (cur)
@@ -68,14 +68,14 @@ Span* CentralCache::GetOneSpan(SpanList& list, size_t size)
 	//	int x = 0;
 	//}
 
-	// 切好span以后，需要把span挂到桶里面去的时候，再加锁
+	// Only take the lock when attaching the split span back to the bucket
 	list._mtx.lock();
 	list.PushFront(span);
 
 	return span;
 }
 
-// 从中心缓存获取一定数量的对象给thread cache
+// Fetch a batch of objects from the central cache for this thread cache
 size_t CentralCache::FetchRangeObj(void*& start, void*& end, size_t batchNum, size_t size)
 {
 	size_t index = SizeClass::Index(size);
@@ -85,8 +85,8 @@ size_t CentralCache::FetchRangeObj(void*& start, void*& end, size_t batchNum, si
 	assert(span);
 	assert(span->_freeList);
 
-	// 从span中获取batchNum个对象
-	// 如果不够batchNum个，有多少拿多少
+	// Take batchNum objects from the span
+	// If fewer than batchNum remain, take as many as available
 	start = span->_freeList;
 	end = start;
 	size_t i = 0;
@@ -101,7 +101,7 @@ size_t CentralCache::FetchRangeObj(void*& start, void*& end, size_t batchNum, si
 	NextObj(end) = nullptr;
 	span->_useCount += actualNum;
 
-	//// 条件断点
+	//// Conditional breakpoint
 	int j = 0;
 	void* cur = start;
 	while (cur)
@@ -133,8 +133,8 @@ void CentralCache::ReleaseListToSpans(void* start, size_t size)
 		span->_freeList = start;
 		span->_useCount--;
 
-		// 说明span的切分出去的所有小块内存都回来了
-		// 这个span就可以再回收给page cache，pagecache可以再尝试去做前后页的合并
+		// All carved objects of this span have been returned
+		// Recycle the span to the page cache, which can then try coalescing adjacent pages
 		if (span->_useCount == 0)
 		{
 			_spanLists[index].Erase(span);
@@ -142,8 +142,8 @@ void CentralCache::ReleaseListToSpans(void* start, size_t size)
 			span->_next = nullptr;
 			span->_prev = nullptr;
 
-			// 释放span给page cache时，使用page cache的锁就可以了
-			// 这时把桶锁解掉
+			// Use the page cache lock when releasing a span back
+			// Release the bucket lock at this point
 			_spanLists[index]._mtx.unlock();
 
 			PageCache::GetInstance()->_pageMtx.lock();

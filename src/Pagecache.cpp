@@ -2,12 +2,12 @@
 
 PageCache PageCache::_sInst;
 
-// 获取一个K页的span
+// Fetch a span of K pages
 Span* PageCache::NewSpan(size_t k)
 {
 	assert(k > 0);
 
-	// 大于128 page的直接向堆申请
+	// Requests larger than 128 pages go straight to the heap
 	if (k > NPAGES - 1)
 	{
 		void* ptr = SystemAlloc(k);
@@ -23,12 +23,12 @@ Span* PageCache::NewSpan(size_t k)
 		return span;
 	}
 
-	// 先检查第k个桶里面有没有span
+	// First check whether bucket k has a span
 	if (!_spanLists[k].Empty())
 	{
 		Span* kSpan = _spanLists[k].PopFront();
 
-		// 建立id和span的映射，方便central cache回收小块内存时，查找对应的span
+		// Map page id -> span so the central cache can find the span when objects are returned
 		for (PAGE_ID i = 0; i < kSpan->_n; ++i)
 		{
 			//_idSpanMap[kSpan->_pageId + i] = kSpan;
@@ -38,7 +38,7 @@ Span* PageCache::NewSpan(size_t k)
 		return kSpan;
 	}
 
-	// 检查一下后面的桶里面有没有span，如果有可以把他它进行切分
+	// Check later buckets for a span that can be split
 	for (size_t i = k + 1; i < NPAGES; ++i)
 	{
 		if (!_spanLists[i].Empty())
@@ -47,9 +47,9 @@ Span* PageCache::NewSpan(size_t k)
 			//Span* kSpan = new Span;
 			Span* kSpan = _spanPool.New();
 
-			// 在nSpan的头部切一个k页下来
-			// k页span返回
-			// nSpan再挂到对应映射的位置
+			// Carve k pages off the front of nSpan
+			// Return the k-page span
+			// Re-attach the remainder nSpan to its mapping
 			kSpan->_pageId = nSpan->_pageId;
 			kSpan->_n = k;
 
@@ -57,14 +57,14 @@ Span* PageCache::NewSpan(size_t k)
 			nSpan->_n -= k;
 
 			_spanLists[nSpan->_n].PushFront(nSpan);
-			// 存储nSpan的首位页号跟nSpan映射，方便page cache回收内存时
-			// 进行的合并查找
+			// Store nSpan's first page id -> nSpan mapping, so the page cache can
+			// look it up during coalescing
 			//_idSpanMap[nSpan->_pageId] = nSpan;
 			//_idSpanMap[nSpan->_pageId + nSpan->_n - 1] = nSpan;
 			_idSpanMap.set(nSpan->_pageId, nSpan);
 			_idSpanMap.set(nSpan->_pageId + nSpan->_n - 1, nSpan);
 
-			// 建立id和span的映射，方便central cache回收小块内存时，查找对应的span
+			// Map page id -> span so the central cache can find the span when objects are returned
 			for (PAGE_ID i = 0; i < kSpan->_n; ++i)
 			{
 				//_idSpanMap[kSpan->_pageId + i] = kSpan;
@@ -75,8 +75,8 @@ Span* PageCache::NewSpan(size_t k)
 		}
 	}
 
-	// 走到这个位置就说明后面没有大页的span了
-	// 这时就去找堆要一个128页的span
+	// Reaching here means no larger span exists in later buckets
+	// Request a 128-page span from the heap
 	//Span* bigSpan = new Span;
 	Span* bigSpan = _spanPool.New();
 	void* ptr = SystemAlloc(NPAGES - 1);
@@ -110,7 +110,7 @@ Span* PageCache::MapObjectToSpan(void* obj)
 
 void PageCache::ReleaseSpanToPageCache(Span* span)
 {
-	// 大于128 page的直接还给堆
+	// Spans larger than 128 pages are returned directly to the heap
 	if (span->_n > NPAGES - 1)
 	{
 		void* ptr = (void*)(span->_pageId << PAGE_SHIFT);
@@ -121,12 +121,12 @@ void PageCache::ReleaseSpanToPageCache(Span* span)
 		return;
 	}
 
-	// 对span前后的页，尝试进行合并，缓解内存碎片问题
+	// Try coalescing adjacent pages to reduce fragmentation
 	while (1)
 	{
 		PAGE_ID prevId = span->_pageId - 1;
 		//auto ret = _idSpanMap.find(prevId);
-		//// 前面的页号没有，不合并了
+		//// No preceding page mapped, skip backward merge
 		//if (ret == _idSpanMap.end())
 		//{
 		//	break;
@@ -138,14 +138,14 @@ void PageCache::ReleaseSpanToPageCache(Span* span)
 			break;
 		}
 
-		// 前面相邻页的span在使用，不合并了
+		// The preceding span is in use, skip backward merge
 		Span* prevSpan = ret;
 		if (prevSpan->_isUse == true)
 		{
 			break;
 		}
 
-		// 合并出超过128页的span没办法管理，不合并了
+		// Merged span would exceed 128 pages and cannot be managed, skip
 		if (prevSpan->_n + span->_n > NPAGES - 1)
 		{
 			break;
@@ -159,7 +159,7 @@ void PageCache::ReleaseSpanToPageCache(Span* span)
 		_spanPool.Delete(prevSpan);
 	}
 
-	// 向后合并
+	// Coalesce forward
 	while (1)
 	{
 		PAGE_ID nextId = span->_pageId + span->_n;

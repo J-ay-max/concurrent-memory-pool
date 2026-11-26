@@ -1,13 +1,13 @@
 #include "ThreadCache.h"
-#include "CentralCache.h"
+#include "Centralcache.h"
 
 void* ThreadCache::FetchFromCentralCache(size_t index, size_t size)
 {
-	// 慢开始反馈调节算法
-	// 1、最开始不会一次向central cache一次批量要太多，因为要太多了可能用不完
-	// 2、如果你不要这个size大小内存需求，那么batchNum就会不断增长，直到上限
-	// 3、size越大，一次向central cache要的batchNum就越小
-	// 4、size越小，一次向central cache要的batchNum就越大
+	// Slow-start feedback throttling
+	// 1. Start with a small batch to avoid over-fetching
+	// 2. Keep growing batchNum up to a cap while requests keep coming
+	// 3. Larger object size -> smaller batch
+	// 4. Smaller object size -> larger batch
 	size_t batchNum = min(_freeLists[index].MaxSize(), SizeClass::NumMoveSize(size));
 	if (_freeLists[index].MaxSize() == batchNum)
 	{
@@ -52,11 +52,11 @@ void ThreadCache::Deallocate(void* ptr, size_t size)
 	assert(ptr);
 	assert(size <= MAX_BYTES);
 
-	// 找对映射的自由链表桶，对象插入进入
+	// Find the mapped free-list bucket and insert the object
 	size_t index = SizeClass::Index(size);
 	_freeLists[index].Push(ptr);
 
-	// 当链表长度大于一次批量申请的内存时就开始还一段list给central cache
+	// When the list grows past one batch, return a segment to the central cache
 	if (_freeLists[index].Size() >= _freeLists[index].MaxSize())
 	{
 		ListTooLong(_freeLists[index], size);

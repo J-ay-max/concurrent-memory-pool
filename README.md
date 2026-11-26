@@ -2,7 +2,7 @@
 
 A high-performance, thread-safe memory allocator in C++17, inspired by the design of Google's tcmalloc. Built from scratch to explore how a three-tier cache hierarchy can reduce lock contention under high thread counts.
 
-**Timeline:** Feb 2026 – Apr 2026 · **Language:** C++17 · **Platform:** Linux (x86-64)
+**Timeline:** Feb 2026 – Apr 2026 · **Language:** C++17 · **Platform:** Linux / Windows (x86-64) · **License:** MIT
 
 ## Overview
 
@@ -80,11 +80,24 @@ src/
 └── ConcurrentMemoryPool.sln   Visual Studio solution (MSVC x64)
 ```
 
-## Build
+## Build and test
 
-The project builds with MSVC (Visual Studio 2022, x64). Open `src/ConcurrentMemoryPool.sln`, or compile the `.cpp` files directly with any C++17 compiler — the code uses pthreads for the benchmark harness.
+Cross-platform via CMake (C++17, requires a C++17 compiler and threads):
 
-> Note: the included benchmark and profiling were run on Linux; the `.sln` is provided for Windows development.
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure    # assertion-based unit tests
+./build/benchmark                             # throughput benchmark
+```
+
+Targets: `mempool` (static library), `benchmark`, `unittest`, `smoke`.
+
+A Visual Studio solution (`src/ConcurrentMemoryPool.sln`) is also included for MSVC development.
+
+## Tests
+
+`unittest` is an assertion-based suite covering: basic alloc/free across size classes, address alignment, no aliasing among live objects, block reuse after free, the large-object (>256 KiB) path, an 8-thread stress workload, and `ObjectPool` construct/destroy/reuse. All tests pass.
 
 ## Skills demonstrated
 
@@ -92,4 +105,4 @@ The project builds with MSVC (Visual Studio 2022, x64). Open `src/ConcurrentMemo
 - Thread-local storage and intrusive data structures
 - Rigorous, low-noise microbenchmarking methodology
 - Performance profiling with `perf` and `c2c` to locate contention
-- C++17 systems programming on Linux
+- C++17 systems programming, cross-platform builds (CMake + MSVC)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Common.h"
+#include "common.h"
 #include "ThreadCache.h"
 #include "Pagecache.h"
 #include "ObjectPool.h"
@@ -22,7 +22,7 @@ static void* ConcurrentAlloc(size_t size)
 	}
 	else
 	{
-		// 通过TLS 每个线程无锁的获取自己的专属的ThreadCache对象
+		// Via TLS, each thread obtains its own ThreadCache lock-free
 		if (pTLSThreadCache == nullptr)
 		{
 			static ObjectPool<ThreadCache> tcPool;

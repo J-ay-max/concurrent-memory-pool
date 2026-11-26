@@ -1,6 +1,7 @@
 #pragma once
 #pragma once
-#include"Common.h"
+#include"common.h"
+#include <unordered_map>
 
 // Single-level array
 template <int BITS>
@@ -8,34 +9,35 @@ class TCMalloc_PageMap1 {
 private:
 	static const int LENGTH = 1 << BITS;
 	void** array_;
+	// The flat array only covers the low 2^BITS pages. On 64-bit builds,
+	// VirtualAlloc/mmap can return high addresses whose page id exceeds that
+	// range, so those keys spill into a hash map instead of indexing OOB.
+	std::unordered_map<uintptr_t, void*> overflow_;
 
 public:
 	typedef uintptr_t Number;
 
-	//explicit TCMalloc_PageMap1(void* (*allocator)(size_t)) {
 	explicit TCMalloc_PageMap1() {
-		//array_ = reinterpret_cast<void**>((*allocator)(sizeof(void*) << BITS));
 		size_t size = sizeof(void*) << BITS;
 		size_t alignSize = SizeClass::_RoundUp(size, 1 << PAGE_SHIFT);
 		array_ = (void**)SystemAlloc(alignSize >> PAGE_SHIFT);
 		memset(array_, 0, sizeof(void*) << BITS);
 	}
 
-	// Return the current value for KEY.  Returns NULL if not yet set,
-	// or if k is out of range.
 	void* get(Number k) const {
 		if ((k >> BITS) > 0) {
-			return NULL;
+			auto it = overflow_.find(k);
+			return it == overflow_.end() ? NULL : it->second;
 		}
 		return array_[k];
 	}
 
-	// REQUIRES "k" is in range "[0,2^BITS-1]".
-	// REQUIRES "k" has been ensured before.
-	//
-	// Sets the value 'v' for key 'k'.
 	void set(Number k, void* v) {
-		array_[k] = v;
+		if ((k >> BITS) > 0) {
+			overflow_[k] = v;
+		} else {
+			array_[k] = v;
+		}
 	}
 };
 

@@ -1,7 +1,7 @@
 #include"ConcurrentAlloc.h"
 
-// ntimes 一轮申请和释放内存的次数
-// rounds 轮次
+// ntimes: number of alloc+free operations per round
+// rounds: number of repetitions
 void BenchmarkMalloc(size_t ntimes, size_t nworks, size_t rounds)
 {
 	std::vector<std::thread> vthread(nworks);
@@ -43,18 +43,18 @@ void BenchmarkMalloc(size_t ntimes, size_t nworks, size_t rounds)
 		t.join();
 	}
 
-	printf("%u个线程并发执行%u轮次，每轮次malloc %u次: 花费：%u ms\n",
-		nworks, rounds, ntimes, malloc_costtime);
+	printf("%zu threads x %zu rounds, malloc %zu times each: %u ms\n",
+		nworks, rounds, ntimes, (unsigned)malloc_costtime.load());
 
-	printf("%u个线程并发执行%u轮次，每轮次free %u次: 花费：%u ms\n",
-		nworks, rounds, ntimes, free_costtime);
+	printf("%zu threads x %zu rounds, free %zu times each: %u ms\n",
+		nworks, rounds, ntimes, (unsigned)free_costtime.load());
 
-	printf("%u个线程并发malloc&free %u次，总计花费：%u ms\n",
-		nworks, nworks * rounds * ntimes, malloc_costtime + free_costtime);
+	printf("%u threads, malloc&free %zu times each, total: %u ms\n",
+		(unsigned)nworks, (size_t)(nworks * rounds * ntimes), (unsigned)(malloc_costtime.load() + free_costtime.load()));
 }
 
 
-// 单轮次申请释放次数 线程数 轮次
+// ops-per-round, thread-count, rounds
 void BenchmarkConcurrentMalloc(size_t ntimes, size_t nworks, size_t rounds)
 {
 	std::vector<std::thread> vthread(nworks);
@@ -96,14 +96,14 @@ void BenchmarkConcurrentMalloc(size_t ntimes, size_t nworks, size_t rounds)
 		t.join();
 	}
 
-	printf("%u个线程并发执行%u轮次，每轮次concurrent alloc %u次: 花费：%u ms\n",
-		nworks, rounds, ntimes, malloc_costtime);
+	printf("%zu threads x %zu rounds, ConcurrentAlloc %zu times each: %u ms\n",
+		nworks, rounds, ntimes, (unsigned)malloc_costtime.load());
 
-	printf("%u个线程并发执行%u轮次，每轮次concurrent dealloc %u次: 花费：%u ms\n",
-		nworks, rounds, ntimes, free_costtime);
+	printf("%zu threads x %zu rounds, ConcurrentFree %zu times each: %u ms\n",
+		nworks, rounds, ntimes, (unsigned)free_costtime.load());
 
-	printf("%u个线程并发concurrent alloc&dealloc %u次，总计花费：%u ms\n",
-		nworks, nworks * rounds * ntimes, malloc_costtime + free_costtime);
+	printf("%u threads, ConcurrentAlloc&Free %zu times each, total: %u ms\n",
+		(unsigned)nworks, (size_t)(nworks * rounds * ntimes), (unsigned)(malloc_costtime.load() + free_costtime.load()));
 }
 
 int main()

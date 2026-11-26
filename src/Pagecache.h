@@ -1,7 +1,7 @@
 #pragma once
 #pragma once
 
-#include "Common.h"
+#include "common.h"
 #include "ObjectPool.h"
 #include "PageMap.h"
 
@@ -13,13 +13,13 @@ public:
 		return &_sInst;
 	}
 
-	// 获取从对象到span的映射
+	// Look up the span that owns an object
 	Span* MapObjectToSpan(void* obj);
 
-	// 释放空闲span回到Pagecache，并合并相邻的span
+	// Release a free span back to the page cache and coalesce neighbors
 	void ReleaseSpanToPageCache(Span* span);
 
-	// 获取一个K页的span
+	// Fetch a span of K pages
 	Span* NewSpan(size_t k);
 
 	std::mutex _pageMtx;

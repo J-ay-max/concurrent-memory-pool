@@ -35,13 +35,13 @@ typedef size_t PAGE_ID;
 // linux
 #endif
 
-// 直接去堆上按页申请空间
+// Allocate page-aligned blocks straight from the heap
 inline static void* SystemAlloc(size_t kpage)
 {
 #ifdef _WIN32
 	void* ptr = VirtualAlloc(0, kpage << 13, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 #else
-	// linux下brk mmap等
+	// brk / mmap on Linux
 #endif
 
 	if (ptr == nullptr)
@@ -56,7 +56,7 @@ inline static void SystemFree(void* ptr)
 #ifdef _WIN32
 	VirtualFree(ptr, 0, MEM_RELEASE);
 #else
-	// sbrk unmmap等
+	// sbrk / munmap etc.
 #endif
 }
 
@@ -66,7 +66,7 @@ static void*& NextObj(void* obj)
 }
 
 
-// 管理切分好的小对象的自由链表
+// Free list managing carved small objects
 class FreeList
 {
 public:
@@ -74,7 +74,7 @@ public:
 	{
 		assert(obj);
 
-		// 头插
+		// Head insert
 		//*(void**)obj = _freeList;
 		NextObj(obj) = _freeList;
 		_freeList = obj;
@@ -87,7 +87,7 @@ public:
 		NextObj(end) = _freeList;
 		_freeList = start;
 
-		// 测试验证+条件断点
+		// Test hook + conditional breakpoint
 		/*int i = 0;
 		void* cur = start;
 		while (cur)
@@ -124,7 +124,7 @@ public:
 	{
 		assert(_freeList);
 
-		// 头删
+		// Head removal
 		void* obj = _freeList;
 		_freeList = NextObj(obj);
 		--_size;
@@ -153,16 +153,16 @@ private:
 	size_t _size = 0;
 };
 
-// 计算对象大小的对齐映射规则
+// Size-class alignment and mapping rules
 class SizeClass
 {
 public:
-	// 整体控制在最多10%左右的内碎片浪费
-	// [1,128]					8byte对齐	    freelist[0,16)
-	// [128+1,1024]				16byte对齐	    freelist[16,72)
-	// [1024+1,8*1024]			128byte对齐	    freelist[72,128)
-	// [8*1024+1,64*1024]		1024byte对齐     freelist[128,184)
-	// [64*1024+1,256*1024]		8*1024byte对齐   freelist[184,208)
+	// Keep internal fragmentation at roughly 10% at most
+	// [1,128]           8B alignment    freelist[0,16)
+	// [129,1024]         16B alignment   freelist[16,72)
+	// [1025,8K]          128B alignment  freelist[72,128)
+	// [8K+1,64K]         1024B alignment freelist[128,184)
+	// [64K+1,256K]       8K alignment    freelist[184,208)
 
 	/*size_t _RoundUp(size_t size, size_t alignNum)
 	{
@@ -238,12 +238,12 @@ public:
 		return ((bytes + (1 << align_shift) - 1) >> align_shift) - 1;
 	}
 
-	// 计算映射的哪一个自由链表桶
+	// Compute which free-list bucket a size maps to
 	static inline size_t Index(size_t bytes)
 	{
 		assert(bytes <= MAX_BYTES);
 
-		// 每个区间有多少个链
+		// number of lists per size range
 		static int group_array[4] = { 16, 56, 56, 56 };
 		if (bytes <= 128) {
 			return _Index(bytes, 3);
@@ -267,14 +267,14 @@ public:
 		return -1;
 	}
 
-	// 一次thread cache从中心缓存获取多少个
+	// How many objects a thread cache fetches per batch
 	static size_t NumMoveSize(size_t size)
 	{
 		assert(size > 0);
 
-		// [2, 512]，一次批量移动多少个对象的(慢启动)上限值
-		// 小对象一次批量上限高
-		// 小对象一次批量上限低
+		// [2, 512] slow-start cap on objects moved per batch
+		// Small objects -> higher batch cap
+		// Large objects -> lower batch cap
 		int num = MAX_BYTES / size;
 		if (num < 2)
 			num = 2;
@@ -285,10 +285,10 @@ public:
 		return num;
 	}
 
-	// 计算一次向系统获取几个页
-	// 单个对象 8byte
+	// Compute how many pages to request from the system
+	// min object size: 8 bytes
 	// ...
-	// 单个对象 256KB
+	// max object size: 256 KB
 	static size_t NumMovePage(size_t size)
 	{
 		size_t num = NumMoveSize(size);
@@ -302,23 +302,23 @@ public:
 	}
 };
 
-// 管理多个连续页大块内存跨度结构
+// Span: a run of consecutive pages
 struct Span
 {
-	PAGE_ID _pageId = 0; // 大块内存起始页的页号
-	size_t  _n = 0;      // 页的数量
+	PAGE_ID _pageId = 0; // page id of the span's first page
+	size_t  _n = 0;      // number of pages
 
-	Span* _next = nullptr;	// 双向链表的结构
+	Span* _next = nullptr;	// doubly-linked list pointer
 	Span* _prev = nullptr;
 
-	size_t _objSize = 0;  // 切好的小对象的大小
-	size_t _useCount = 0; // 切好小块内存，被分配给thread cache的计数
-	void* _freeList = nullptr;  // 切好的小块内存的自由链表
+	size_t _objSize = 0;  // size of carved small objects
+	size_t _useCount = 0; // count of carved objects handed out to thread caches
+	void* _freeList = nullptr;  // free list of carved objects
 
-	bool _isUse = false;          // 是否在被使用
+	bool _isUse = false;          // whether the span is in use
 };
 
-// 带头双向循环链表 
+// Doubly-circular list with a sentinel head 
 class SpanList
 {
 public:
@@ -374,8 +374,8 @@ public:
 		assert(pos);
 		assert(pos != _head);
 
-		// 1、条件断点
-		// 2、查看栈帧
+		// 1. Conditional breakpoint
+		// 2. Inspect the stack frame
 		/*if (pos == _head)
 		{
 		int x = 0;
@@ -391,5 +391,5 @@ public:
 private:
 	Span* _head;
 public:
-	std::mutex _mtx; // 桶锁
+	std::mutex _mtx; // bucket lock
 };

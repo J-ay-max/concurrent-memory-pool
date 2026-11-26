@@ -1,139 +1,143 @@
-#include "ObjectPool.h"
+// Assertion-based unit tests for the concurrent memory pool.
+// Build with CMake (target `unittest`) or: cl /std:c++17 Unittest.cpp ThreadCache.cpp Centralcache.cpp Pagecache.cpp
 #include "ConcurrentAlloc.h"
 
-void Alloc1()
+#include <cassert>
+#include <cstdio>
+#include <cstdint>
+#include <thread>
+#include <vector>
+#include <unordered_set>
+
+namespace {
+
+int g_failures = 0;
+
+#define CHECK(cond, msg)                                            \
+    do {                                                            \
+        if (!(cond)) {                                              \
+            std::printf("  [FAIL] %s (line %d)\n", msg, __LINE__);  \
+            ++g_failures;                                           \
+        }                                                           \
+    } while (0)
+
+void testBasicAllocFree()
 {
-	for (size_t i = 0; i < 5; ++i)
-	{
-		void* ptr = ConcurrentAlloc(6);
-	}
+    std::printf("[test] basic alloc/free\n");
+    const size_t sizes[] = {1, 8, 16, 64, 256, 1024, 4096, 64 * 1024, 256 * 1024};
+    for (size_t s : sizes) {
+        void* p = ConcurrentAlloc(s);
+        CHECK(p != nullptr, "allocation returned null");
+        // Returned address must be aligned to at least 8 bytes
+        CHECK(reinterpret_cast<std::uintptr_t>(p) % 8 == 0, "misaligned allocation");
+        ConcurrentFree(p);
+    }
 }
 
-void Alloc2()
+void testDistinctObjectsDoNotOverlap()
 {
-	for (size_t i = 0; i < 5; ++i)
-	{
-		void* ptr = ConcurrentAlloc(7);
-	}
+    std::printf("[test] distinct live objects do not share an address\n");
+    const int N = 512;
+    std::vector<void*> ptrs;
+    ptrs.reserve(N);
+    for (int i = 0; i < N; ++i) {
+        void* p = ConcurrentAlloc(32);
+        CHECK(p != nullptr, "allocation returned null");
+        ptrs.push_back(p);
+    }
+    std::unordered_set<void*> seen;
+    for (void* p : ptrs) {
+        CHECK(seen.insert(p).second, "two live objects share an address");
+    }
+    for (void* p : ptrs) {
+        ConcurrentFree(p);
+    }
 }
 
-void TLSTest()
+void testReuseAfterFree()
 {
-	std::thread t1(Alloc1);
-	t1.join();
-
-	std::thread t2(Alloc2);
-	t2.join();
+    std::printf("[test] freed memory is reused\n");
+    void* first = ConcurrentAlloc(64);
+    CHECK(first != nullptr, "first allocation returned null");
+    ConcurrentFree(first);
+    void* second = ConcurrentAlloc(64);
+    CHECK(second != nullptr, "second allocation returned null");
+    CHECK(first == second, "freed block was not reused by the same size class");
+    ConcurrentFree(second);
 }
 
-// 测试申请释放7次个8byte内不等的几个对象的申请和释放
-// 通过调试观察演示讲解申请的过程和释放过程，
-// 申请过程体现也分割和切分,释放过程体现出页的合并。
-void TestConcurrentAlloc1()
+void testLargeObjectPath()
 {
-	void* p1 = ConcurrentAlloc(6);
-	void* p2 = ConcurrentAlloc(8);
-	void* p3 = ConcurrentAlloc(1);
-	void* p4 = ConcurrentAlloc(7);
-	void* p5 = ConcurrentAlloc(8);
-	void* p6 = ConcurrentAlloc(8);
-	void* p7 = ConcurrentAlloc(8);
-
-
-	cout << p1 << endl;
-	cout << p2 << endl;
-	cout << p3 << endl;
-	cout << p4 << endl;
-	cout << p5 << endl;
-	cout << p6 << endl;
-	cout << p7 << endl;
-
-
-	ConcurrentFree(p1);
-	ConcurrentFree(p2);
-	ConcurrentFree(p3);
-	ConcurrentFree(p4);
-	ConcurrentFree(p5);
-	ConcurrentFree(p6);
-	ConcurrentFree(p7);
+    std::printf("[test] large-object path (> 256 KiB)\n");
+    const size_t sizes[] = {257 * 1024, 1024 * 1024, 129 * 8 * 1024};
+    for (size_t s : sizes) {
+        void* p = ConcurrentAlloc(s);
+        CHECK(p != nullptr, "large allocation returned null");
+        CHECK(reinterpret_cast<std::uintptr_t>(p) % 4096 == 0, "large block is not page-aligned");
+        ConcurrentFree(p);
+    }
 }
 
-// 测试申请释放1024个8byte内不等的几个对象的申请，这1024次申请把第一个页分完了。
-// 打断点，通过调试观察演示讲解第1025次申请，在page cache去切一个新span，验证前1024次申请和切分逻辑
-void TestConcurrentAlloc2()
+void testManyThreads()
 {
-	for (size_t i = 0; i < 1024; ++i)
-	{
-		void* p1 = ConcurrentAlloc(6);
-		cout << p1 << endl;
-	}
-
-	void* p2 = ConcurrentAlloc(8);
-	cout << p2 << endl;
+    std::printf("[test] 8 threads x 20000 alloc/free\n");
+    const int THREADS = 8;
+    const int ITERS = 20000;
+    std::vector<std::thread> ts;
+    ts.reserve(THREADS);
+    for (int t = 0; t < THREADS; ++t) {
+        ts.emplace_back([t, ITERS]() {
+            size_t sz = 8 + (t % 5) * 16; // vary size per thread
+            std::vector<void*> batch;
+            batch.reserve(64);
+            for (int i = 0; i < ITERS; ++i) {
+                void* p = ConcurrentAlloc(sz);
+                if (!p) { ++g_failures; return; }
+                batch.push_back(p);
+                if (batch.size() == 64) {
+                    for (void* q : batch) ConcurrentFree(q);
+                    batch.clear();
+                }
+            }
+            for (void* q : batch) ConcurrentFree(q);
+        });
+    }
+    for (auto& th : ts) th.join();
 }
 
-void TestAddressShift()
+void testObjectPoolReuse()
 {
-	PAGE_ID id1 = 2000;
-	PAGE_ID id2 = 2001;
-	char* p1 = (char*)(id1 << PAGE_SHIFT);
-	char* p2 = (char*)(id2 << PAGE_SHIFT);
-	while (p1 < p2)
-	{
-		cout << (void*)p1 << ":" << ((PAGE_ID)p1 >> PAGE_SHIFT) << endl;
-		p1 += 8;
-	}
+    std::printf("[test] ObjectPool construct/destroy/reuse\n");
+    struct Item { int a; double b; };
+    ObjectPool<Item> pool;
+    Item* x = pool.New();
+    CHECK(x != nullptr, "ObjectPool.New returned null");
+    x->a = 42;
+    pool.Delete(x);
+    Item* y = pool.New();
+    CHECK(y == x, "ObjectPool did not recycle the returned object");
+    pool.Delete(y);
 }
 
-// 创建两个线程分别走一下申请释放10次，验证基本的多线程场景下申请释放是否有问题
-void MultiThreadAlloc1()
+} // namespace
+
+int main()
 {
-	std::vector<void*> v;
-	for (size_t i = 0; i < 10; ++i)
-	{
-		void* ptr = ConcurrentAlloc(6);
-		cout << std::this_thread::get_id() << ptr << endl;
-		v.push_back(ptr);
-	}
+    std::printf("Running concurrent memory pool tests\n");
+    std::printf("=====================================\n");
 
-	for (auto e : v)
-	{
-		ConcurrentFree(e);
-	}
-}
+    testBasicAllocFree();
+    testDistinctObjectsDoNotOverlap();
+    testReuseAfterFree();
+    testLargeObjectPath();
+    testManyThreads();
+    testObjectPoolReuse();
 
-void MultiThreadAlloc2()
-{
-	std::vector<void*> v;
-	for (size_t i = 0; i < 10; ++i)
-	{
-		void* ptr = ConcurrentAlloc(16);
-		cout << std::this_thread::get_id() << ptr << endl;
-		v.push_back(ptr);
-	}
-
-	for (auto e : v)
-	{
-		ConcurrentFree(e);
-	}
-}
-
-void TestMultiThread()
-{
-	std::thread t1(MultiThreadAlloc1);
-	std::thread t2(MultiThreadAlloc2);
-
-	t1.join();
-	t2.join();
-}
-
-// 申请释放一次257KB内存，验证大块内存申请释放，调试观察向page cache切分和合并大块页的逻辑
-// 申请释放一次129*8KB内存，验证超大块内存申请释放，调试观察向堆申请释放内存逻辑
-void BigAlloc()
-{
-	void* p1 = ConcurrentAlloc(257 * 1024);
-	ConcurrentFree(p1);
-
-	void* p2 = ConcurrentAlloc(129 * 8 * 1024);
-	ConcurrentFree(p2);
+    std::printf("=====================================\n");
+    if (g_failures == 0) {
+        std::printf("All tests PASSED\n");
+        return 0;
+    }
+    std::printf("%d check(s) FAILED\n", g_failures);
+    return 1;
 }

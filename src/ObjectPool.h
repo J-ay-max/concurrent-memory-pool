@@ -3,7 +3,7 @@
 using namespace std;
 
 
-//定长内存池
+//Fixed-size object pool
 //template<size_t N>
 //class ObjectPool
 //{};
@@ -17,17 +17,17 @@ public:
 	T* New()
 	{
 		T* obj = nullptr;
-		//优先把还回来的内存块再次重复利用
+		//Reuse returned memory blocks first
 		if (_freelist)
 		{
-			void* next = *((int**)_freelist);
+			void* next = *((void**)_freelist);
 			obj = (T*)_freelist;
 			_freelist = next;
 			
 		}
 		else
 		{
-			//剩余内存不够一个对像空间时，重新开辟大块空间
+			// When remaining memory cannot hold one object, allocate a new large block
 			if (_remainBytes < sizeof(T))
 			{
 				_remainBytes = 128 * 1024;
@@ -36,39 +36,39 @@ public:
 				{
 					throw bad_alloc();
 				}
-				obj = (T*)_memory;
-				size_t objsize = sizeof(T) < sizeof(void*) ? sizeof(void*) : sizeof(T);
-				_memory += objsize;
-				_remainBytes -= objsize;
-		
 			}
+			// Carve one object from the current block (whether just allocated or still has room)
+			obj = (T*)_memory;
+			size_t objsize = sizeof(T) < sizeof(void*) ? sizeof(void*) : sizeof(T);
+			_memory += objsize;
+			_remainBytes -= objsize;
 		}
-		//定位new,显式调用构造函数初始化
+		//Placement new: explicitly invoke the constructor
 		new(obj)T;
 		return obj;
 
 	}
 	void Delete(T* obj)
 	{
-		//显式调用析构函数
+		//Explicitly invoke the destructor
 		obj->~T();
-		//将释放的对象链接到自由链表中
+		//Link released objects into the free list
 		if (_freelist==nullptr)
 		{
 			_freelist = obj;
-			*(int**)obj = nullptr;
+			*(void**)obj = nullptr;
 		}
 		else
 		{
-			//头插
-			*(int**)obj = _freelist;
+			//Head insert
+			*(void**)obj = _freelist;
 			_freelist = obj;
 
 		}
 	}
 private:
-	char* _memory = nullptr;//指向大块内存的指针
-	size_t _remainBytes = 0;//剩余内存大小
-	void* _freelist=nullptr;//还回来过程中链接的自由链表的头指针
+	char* _memory = nullptr;//pointer to the large memory block
+	size_t _remainBytes = 0;//remaining bytes in the block
+	void* _freelist=nullptr;//head of the free list built from returned blocks
 	
 };
