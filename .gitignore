@@ -1,0 +1,11 @@
+*.o
+*.a
+*.so
+*.out
+build/
+cmake-build-*/
+.vscode/
+.idea/
+perf.data
+perf.data.old
+c2c/*
