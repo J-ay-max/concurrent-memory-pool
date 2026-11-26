@@ -63,6 +63,29 @@ Rather than stopping at the numbers, I profiled the scaling collapse with `perf`
 
 > This project was an exercise in measuring first and optimizing second — the profiling step turned a vague "it doesn't scale" observation into a specific, actionable finding.
 
+## Source layout
+
+```
+src/
+├── common.h              SizeClass (208 size classes), FreeList, Span, page-map helpers
+├── ObjectPool.h          fixed-size object pool used behind ThreadCache
+├── PageMap.h             Linux portable page map (source of the global mutex bottleneck)
+├── ThreadCache.h/.cpp    TLS-isolated per-thread cache with intrusive free lists
+├── Centralcache.h/.cpp   size-class-bucketed shared cache with batched transfer
+├── Pagecache.h/.cpp      page-level allocator, Span split and coalescing
+├── ConcurrentAlloc.h     public `ConcurrentAlloc` / `ConcurrentFree` entry points
+├── BenchMark.cpp         multi-process benchmark harness (1/2/4/8/16 threads)
+├── Test.cpp              functional smoke tests
+├── Unittest.cpp          unit tests
+└── ConcurrentMemoryPool.sln   Visual Studio solution (MSVC x64)
+```
+
+## Build
+
+The project builds with MSVC (Visual Studio 2022, x64). Open `src/ConcurrentMemoryPool.sln`, or compile the `.cpp` files directly with any C++17 compiler — the code uses pthreads for the benchmark harness.
+
+> Note: the included benchmark and profiling were run on Linux; the `.sln` is provided for Windows development.
+
 ## Skills demonstrated
 
 - Concurrent data structures and lock granularity design

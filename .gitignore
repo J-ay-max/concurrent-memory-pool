@@ -1,3 +1,17 @@
+# Visual Studio build artifacts
+.vs/
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.idb
+*.tlog
+*.log
+*.lastbuildstate
+*.unsuccessfulbuild
+
+# General
 *.o
 *.a
 *.so
@@ -6,6 +20,12 @@ build/
 cmake-build-*/
 .vscode/
 .idea/
+
+# Profiling data
 perf.data
 perf.data.old
 c2c/*
+
+# OS
+.DS_Store
+Thumbs.db
